@@ -1,0 +1,8 @@
+# Local environment / secrets
+.env
+
+# Editor / tooling state (not part of the product)
+.claude/
+
+# Compiled binary (built via `go build` or the Dockerfile)
+/navidrome-station

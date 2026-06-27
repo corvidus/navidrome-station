@@ -1,0 +1,38 @@
+name: navidrome-station
+
+services:
+  station:
+    build: .
+    image: navidrome-station:latest
+    container_name: navidrome-station
+    restart: unless-stopped
+    # Defence in depth: the service writes nothing to disk and needs no
+    # privileges, so lock it down to a read-only root filesystem with no Linux
+    # capabilities and no privilege escalation. Together with the distroless
+    # :nonroot image, a compromise still cannot write to the host or escalate.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Hosts sign in with their own Navidrome accounts, so the service needs no
+    # credentials of its own — only the URL of your Navidrome instance.
+    environment:
+      LISTEN_ADDR: ":8080"
+      # Point this at your Navidrome. The default assumes Navidrome is reachable
+      # as "navidrome:4533" on the shared Docker network defined below.
+      ND_URL: "http://navidrome:4533"
+    ports:
+      # host:container — change the host port to taste, then point a reverse
+      # proxy (for TLS) at it. See the README for path-based routing.
+      - "8090:8080"
+    networks:
+      - navidrome
+
+networks:
+  # Join the Docker network your Navidrome stack runs on so this service can
+  # reach it by name. Set `name:` to that network (Compose names a stack's
+  # default network "<project>_default", e.g. "navidrome_default").
+  navidrome:
+    external: true
+    name: navidrome_default

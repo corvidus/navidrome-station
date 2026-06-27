@@ -1,0 +1,9 @@
+.git
+.gitignore
+.claude
+.env
+*.md
+navidrome-station
+docker-compose.yml
+Dockerfile
+.dockerignore

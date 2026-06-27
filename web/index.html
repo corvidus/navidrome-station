@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#303030" />
+<title>Listening Station</title>
+<style>
+  /* Matches Navidrome's default "Dark" theme: Material dark palette with a
+     light-blue primary (#90caf9) on grey surfaces (#303030 / #424242). */
+  :root {
+    color-scheme: dark;
+    --bg: #303030;                                  /* background.default */
+    --surface: #424242;                             /* background.paper */
+    --surface-container: #4a4a4a;                   /* slightly raised */
+    --surface-container-high: #555555;              /* hover / active */
+    --secondary-container: rgba(144, 202, 249, .16);/* selected tint (primary) */
+    --on-secondary-container: #90caf9;              /* selected text (primary) */
+    --on-surface: #ffffff;                          /* text.primary */
+    --on-surface-variant: rgba(255, 255, 255, .7);  /* text.secondary */
+    --outline: rgba(255, 255, 255, .23);            /* divider / borders */
+    --accent: #90caf9;                              /* palette.primary.main */
+    --on-accent: rgba(0, 0, 0, .87);               /* contrast text on primary */
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--on-surface);
+    font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+    display: flex; flex-direction: column; max-width: 520px; margin: 0 auto;
+    min-height: 100%;
+  }
+
+  header {
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center;
+    gap: 12px; padding: 14px 16px calc(14px + env(safe-area-inset-top, 0));
+    background: var(--bg);
+  }
+  header .title { font-size: 1.15rem; font-weight: 600; flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header .listeners {
+    font-size: .8rem; color: var(--on-surface-variant); display: none;
+    align-items: center; gap: 5px;
+  }
+  header .listeners.show { display: flex; }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .icon-btn {
+    width: 42px; height: 42px; border: 0; border-radius: 50%; background: transparent;
+    color: var(--on-surface-variant); display: none; place-items: center; cursor: pointer;
+  }
+  .icon-btn.show { display: grid; }
+  .icon-btn:active { background: var(--surface-container-high); }
+  svg { display: block; fill: currentColor; }
+
+  main { flex: 1; overflow-y: auto; padding: 0 16px 40px; }
+  .view { display: none; }
+  .view.show { display: block; }
+
+  /* Station picker */
+  .section-head { font-size: .8rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+                  color: var(--on-surface-variant); margin: 18px 4px 10px; }
+  .station-card {
+    display: flex; align-items: center; gap: 14px; padding: 14px; margin-bottom: 12px;
+    background: var(--surface-container); border-radius: var(--radius); cursor: pointer;
+  }
+  .station-card:active { background: var(--surface-container-high); }
+  .station-card .sc-art { width: 56px; height: 56px; border-radius: 10px; flex: none;
+    background: var(--surface-container-high); object-fit: cover; }
+  .station-card .sc-meta { flex: 1; min-width: 0; }
+  .station-card .sc-owner { font-weight: 600; }
+  .station-card .sc-now { font-size: .85rem; color: var(--on-surface-variant);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .station-card .sc-listeners { font-size: .8rem; color: var(--on-surface-variant);
+    display: flex; align-items: center; gap: 5px; flex: none; }
+  .empty { text-align: center; color: var(--on-surface-variant); padding: 60px 20px; }
+
+  /* Login */
+  .login-card { padding: 40px 4px; max-width: 360px; margin: 0 auto; }
+  .login-card h2 { margin: 0 0 6px; }
+  .login-card p { color: var(--on-surface-variant); margin: 0 0 22px; font-size: .9rem; }
+  .field {
+    width: 100%; padding: 13px; background: var(--surface); border: 1px solid var(--outline);
+    border-radius: 10px; color: var(--on-surface); margin-bottom: 14px; font-size: 1rem;
+  }
+  .filled-btn {
+    width: 100%; padding: 14px; border: 0; border-radius: 999px; background: var(--accent);
+    color: var(--on-accent); font-size: 1rem; font-weight: 600; cursor: pointer;
+  }
+  .hint { font-size: .82rem; color: var(--on-surface-variant); margin: 8px 2px 0; min-height: 1em; }
+
+  /* Player / now playing */
+  .topline { display: flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
+  .text-btn { background: none; border: 0; color: var(--accent); font-size: .9rem; cursor: pointer;
+    padding: 6px 4px; display: inline-flex; align-items: center; gap: 4px; }
+  .hero { text-align: center; padding: 8px 0 14px; }
+  .art-wrap {
+    width: min(74vw, 320px); aspect-ratio: 1; margin: 0 auto 22px; border-radius: var(--radius);
+    overflow: hidden; background: var(--surface-container-high); box-shadow: 0 16px 40px rgba(0,0,0,.5);
+    display: grid; place-items: center;
+  }
+  .art-wrap img { width: 100%; height: 100%; object-fit: cover; }
+  .art-wrap .ph { color: var(--outline); }
+  .np-title { font-size: 1.4rem; font-weight: 650; margin: 0 0 4px; line-height: 1.25; }
+  .np-artist { color: var(--on-surface-variant); margin: 0 0 2px; font-size: 1rem; }
+  .np-album { color: var(--outline); margin: 0; font-size: .85rem; }
+
+  .progress { margin: 18px 4px 0; }
+  .bar { height: 4px; background: var(--surface-container-high); border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; width: 0%; background: var(--accent); transition: width .25s linear; }
+  .times { display: flex; justify-content: space-between; font-size: .72rem;
+           color: var(--on-surface-variant); margin-top: 7px; }
+
+  /* Transport + modes (host only) */
+  .transport { display: none; align-items: center; justify-content: center; gap: 24px; margin: 14px 0 6px; }
+  .transport.show { display: flex; }
+  .t-btn { width: 56px; height: 56px; border: 0; border-radius: 50%; background: transparent;
+           color: var(--on-surface); display: grid; place-items: center; cursor: pointer; }
+  .t-btn:active { background: var(--surface-container-high); }
+  .t-play { width: 72px; height: 72px; border-radius: 50%; background: var(--accent); color: var(--on-accent);
+            box-shadow: 0 8px 22px rgba(236,64,122,.45); }
+  .host-tools { display: none; flex-direction: column; gap: 12px; align-items: center; margin-top: 6px; }
+  .host-tools.show { display: flex; }
+  .mode-row { display: flex; gap: 8px; }
+  .mode-chip {
+    background: var(--surface-container-high); color: var(--on-surface-variant); border: 1px solid var(--outline);
+    border-radius: 999px; padding: 7px 14px; font-size: .8rem; font-weight: 500; cursor: pointer;
+  }
+  .mode-chip.active { background: var(--secondary-container); color: var(--on-secondary-container); border-color: transparent; }
+  .chip {
+    background: var(--surface-container-high); color: var(--on-surface); border: 1px solid var(--outline);
+    border-radius: 999px; padding: 9px 18px; font-size: .85rem; font-weight: 500; cursor: pointer;
+    display: flex; gap: 8px; align-items: center;
+  }
+
+  /* Queue list */
+  .queue-head { font-size: .8rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+                color: var(--on-surface-variant); margin: 22px 4px 8px; }
+  .track { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; }
+  .track.current { background: var(--secondary-container); }
+  .track.current .t-title { color: var(--on-secondary-container); }
+  .track .thumb { width: 48px; height: 48px; border-radius: 8px; object-fit: cover;
+                  background: var(--surface-container-high); flex: none; }
+  .track .meta { flex: 1; min-width: 0; }
+  .t-title { font-size: .95rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .t-sub { font-size: .8rem; color: var(--on-surface-variant); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .eq { display: flex; gap: 2px; align-items: flex-end; height: 16px; flex: none; padding-right: 6px; }
+  .eq span { width: 3px; background: var(--accent); border-radius: 2px; animation: bounce 1s ease-in-out infinite; }
+  .eq span:nth-child(2) { animation-delay: .2s; } .eq span:nth-child(3) { animation-delay: .4s; }
+  @keyframes bounce { 0%,100% { height: 5px; } 50% { height: 16px; } }
+  .t-dur { font-size: .8rem; color: var(--on-surface-variant); flex: none; }
+
+  /* Overlays / sheets */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none;
+    align-items: flex-end; justify-content: center; z-index: 20; }
+  .overlay.show { display: flex; }
+  .sheet { width: 100%; max-width: 520px; background: var(--surface-container); border-radius: 28px 28px 0 0;
+    padding: 22px 20px calc(28px + env(safe-area-inset-bottom, 0)); max-height: 78vh; overflow-y: auto; }
+  .sheet h2 { font-size: 1.05rem; margin: 0 0 4px; }
+  .sheet .sub { font-size: .82rem; color: var(--on-surface-variant); margin: 0 0 16px; }
+  .q-item, .pl-item { display: flex; align-items: center; gap: 8px; padding: 12px 4px;
+    border-bottom: 1px solid var(--outline); }
+  .q-item .name, .pl-item .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pl-item { cursor: pointer; }
+  .pl-item:active { background: var(--surface-container-high); }
+  .pl-item .count { font-size: .8rem; color: var(--on-surface-variant); }
+  .mini { width: 34px; height: 34px; border: 0; border-radius: 8px; background: var(--surface-container-high);
+    color: var(--on-surface); cursor: pointer; display: grid; place-items: center; flex: none; }
+  .mini:disabled { opacity: .35; }
+  .mini.danger { color: var(--accent); }
+
+  /* Join gate */
+  .join-gate { position: fixed; inset: 0; background: rgba(48,48,48,.86); backdrop-filter: blur(6px);
+    display: none; place-items: center; z-index: 30; padding: 24px; }
+  .join-gate.show { display: grid; }
+  .join-card { text-align: center; }
+  .join-card p { color: var(--on-surface-variant); margin: 0 0 22px; }
+  .join-card .filled-btn { padding: 16px 40px; width: auto; }
+
+  /* Centred dialog: shareable guest link + QR */
+  .overlay.modal { align-items: center; padding: 20px; }
+  .dialog { width: 100%; max-width: 360px; background: var(--surface-container);
+    border-radius: 16px; padding: 16px 18px calc(18px + env(safe-area-inset-bottom, 0)); }
+  .dialog .icon-btn { display: grid; }
+  .dialog-head { display: flex; align-items: center; gap: 10px; font-size: 1.05rem; font-weight: 600; }
+  .dialog-head span { flex: 1; }
+  .dialog-sub { font-size: .82rem; color: var(--on-surface-variant); margin: 8px 0 16px; }
+  .qr-card { background: #fff; border-radius: 12px; padding: 16px; display: flex; justify-content: center; }
+  .qr-card img { width: 240px; height: 240px; display: block; image-rendering: pixelated; }
+  .url-row { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
+  .url-field { flex: 1; min-width: 0; background: var(--surface-container-high); color: var(--on-surface);
+    border: 1px solid var(--outline); border-radius: 999px; padding: 10px 14px; font-size: .85rem; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="title" id="title">Listening Station</span>
+    <span class="listeners" id="listeners-wrap"><span class="dot"></span><span id="listeners">0</span></span>
+    <button id="manage" class="icon-btn" title="Manage queue" aria-label="Manage queue">
+      <svg width="24" height="24" viewBox="0 0 24 24"><path d="M15,6H3v2h12zM15,10H3v2h12zM3,16h8v-2H3zM17,6v8.18A3,3 0 1,0 19,17V8h3V6z"/></svg>
+    </button>
+    <button id="logout" class="icon-btn" title="Log out" aria-label="Log out">
+      <svg width="24" height="24" viewBox="0 0 24 24"><path d="M17,7l-1.41,1.41L18.17,11H8v2h10.17l-2.58,2.58L17,17l5,-5zM4,5h8V3H4a2,2 0 0,0 -2,2v14a2,2 0 0,0 2,2h8v-2H4z"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <!-- Guest: pick a station -->
+    <section id="view-picker" class="view">
+      <div class="section-head">Live stations</div>
+      <div id="stations"></div>
+    </section>
+
+    <!-- Host: log in -->
+    <section id="view-login" class="view">
+      <div class="login-card">
+        <h2>Host a station</h2>
+        <p>Sign in with your Navidrome account. Your playlists become the station; everyone at the guest link hears them in sync.</p>
+        <input id="lg-user" class="field" type="text" placeholder="Navidrome username" autocomplete="username" />
+        <input id="lg-pass" class="field" type="password" placeholder="Password" autocomplete="current-password" />
+        <button class="filled-btn" id="lg-go">Sign in</button>
+        <p id="lg-hint" class="hint"></p>
+      </div>
+    </section>
+
+    <!-- Player (host + guest) -->
+    <section id="view-player" class="view">
+      <div class="topline">
+        <button id="back" class="text-btn" style="display:none">
+          <svg width="18" height="18" viewBox="0 0 24 24"><path d="M15.41,7.41L14,6l-6,6l6,6l1.41,-1.41L10.83,12z"/></svg>
+          Stations
+        </button>
+      </div>
+      <div class="hero">
+        <div class="art-wrap">
+          <img id="art" alt="" style="display:none" />
+          <svg id="art-ph" class="ph" width="96" height="96" viewBox="0 0 24 24"><path d="M12,3v10.55A4,4 0 1,0 14,17V7h4V3z"/></svg>
+        </div>
+        <h1 id="np-title" class="np-title">Connecting…</h1>
+        <p id="np-artist" class="np-artist"></p>
+        <p id="np-album" class="np-album"></p>
+
+        <div class="progress">
+          <div class="bar"><div id="fill" class="fill"></div></div>
+          <div class="times"><span id="pos">0:00</span><span id="dur">0:00</span></div>
+        </div>
+
+        <div id="transport" class="transport">
+          <button class="t-btn" id="prev" aria-label="Previous">
+            <svg width="30" height="30" viewBox="0 0 24 24"><path d="M6,6h2v12H6zm3.5,6l8.5,6V6z"/></svg>
+          </button>
+          <button class="t-btn t-play" id="toggle" aria-label="Play or pause">
+            <svg id="toggle-icon" width="38" height="38" viewBox="0 0 24 24"><path d="M8,5v14l11,-7z"/></svg>
+          </button>
+          <button class="t-btn" id="next" aria-label="Next">
+            <svg width="30" height="30" viewBox="0 0 24 24"><path d="M6,18l8.5,-6L6,6v12zM16,6v12h2V6h-2z"/></svg>
+          </button>
+        </div>
+
+        <div id="host-tools" class="host-tools">
+          <div class="mode-row">
+            <button class="mode-chip" data-mode="all">Repeat all</button>
+            <button class="mode-chip" data-mode="none">No repeat</button>
+            <button class="mode-chip" data-mode="shuffle">Shuffle</button>
+          </div>
+          <button class="chip" id="open-queue">
+            <svg width="18" height="18" viewBox="0 0 24 24"><path d="M14,10H2v2h12zM14,6H2v2h12zM2,16h8v-2H2zM21.5,11.5L23,13l-6.99,7l-4.51,-4.5L13,14l3.01,3z"/></svg>
+            Manage queue
+          </button>
+          <button class="chip" id="share-btn">
+            <svg width="18" height="18" viewBox="0 0 24 24"><path d="M3.9,12c0,-1.71 1.39,-3.1 3.1,-3.1h4V7H7a5,5 0 0,0 0,10h4v-1.9H7c-1.71,0 -3.1,-1.39 -3.1,-3.1zM8,13h8v-2H8zm9,-6h-4v1.9h4c1.71,0 3.1,1.39 3.1,3.1s-1.39,3.1 -3.1,3.1h-4V17h4a5,5 0 0,0 0,-10z"/></svg>
+            Share link
+          </button>
+        </div>
+      </div>
+
+      <h2 class="queue-head">Up Next</h2>
+      <div id="queue"></div>
+    </section>
+  </main>
+
+  <audio id="audio" preload="auto"></audio>
+
+  <!-- Host: queue editor -->
+  <div id="queue-overlay" class="overlay">
+    <div class="sheet">
+      <h2>Station queue</h2>
+      <p class="sub">Playlists play top to bottom. Reorder, remove, or add more below.</p>
+      <div id="queue-current"></div>
+      <h2 style="margin-top:18px">Add a playlist</h2>
+      <div id="queue-available"></div>
+      <p id="queue-hint" class="hint"></p>
+    </div>
+  </div>
+
+  <!-- Host: shareable guest link + QR code -->
+  <div id="share-overlay" class="overlay modal">
+    <div class="dialog">
+      <div class="dialog-head">
+        <svg width="22" height="22" viewBox="0 0 24 24"><path d="M3.9,12c0,-1.71 1.39,-3.1 3.1,-3.1h4V7H7a5,5 0 0,0 0,10h4v-1.9H7c-1.71,0 -3.1,-1.39 -3.1,-3.1zM8,13h8v-2H8zm9,-6h-4v1.9h4c1.71,0 3.1,1.39 3.1,3.1s-1.39,3.1 -3.1,3.1h-4V17h4a5,5 0 0,0 0,-10z"/></svg>
+        <span>Share station</span>
+        <button id="share-close" class="icon-btn" aria-label="Close">
+          <svg width="22" height="22" viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12z"/></svg>
+        </button>
+      </div>
+      <p class="dialog-sub">Anyone with this link can listen along, in sync.</p>
+      <div class="qr-card"><img id="qr-img" alt="Station QR code" width="240" height="240" /></div>
+      <div class="url-row">
+        <input id="share-url" class="url-field" type="text" readonly />
+        <button id="share-copy" class="icon-btn" aria-label="Copy link">
+          <svg width="22" height="22" viewBox="0 0 24 24"><path d="M16,1H4a2,2 0 0,0 -2,2v14h2V3h12zm3,4H8a2,2 0 0,0 -2,2v14a2,2 0 0,0 2,2h11a2,2 0 0,0 2,-2V7a2,2 0 0,0 -2,-2zm0,16H8V7h11z"/></svg>
+        </button>
+      </div>
+      <p id="share-hint" class="hint" style="text-align:center"></p>
+    </div>
+  </div>
+
+  <!-- Guest: autoplay gesture for deep links -->
+  <div id="join" class="join-gate">
+    <div class="join-card">
+      <p>Tune in to the live station — everyone hears the same thing, together.</p>
+      <button class="filled-btn" id="join-btn">Start listening</button>
+    </div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const audio = $('audio');
+const DRIFT = 1.5;
+const API = '/station';
+const HOST_MODE = location.pathname.replace(/\/+$/, '').endsWith('/leader');
+
+let room = null;          // current room id
+let isHost = false;       // controlling this room
+let ws = null, current = null, lastState = null, joined = false, queueKey = '';
+let startTimer = null, awaitingStart = false; // pending aligned-start of a new stream
+let hostQueue = [];       // host's working copy of queued playlists
+let myUser = null;        // signed-in host's username (for the shareable link)
+
+const PLAY = 'M8,5v14l11,-7z';                       // Material play_arrow
+const PAUSE = 'M6,19h4V5H6v14zM14,5v14h4V5h-4z';      // Material pause
+
+function fmt(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function esc(s) { return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function targetPosition(st) { return st.position + (Date.now() - st.serverTime) / 1000; }
+function roomURL(suffix) { return API + '/r/' + encodeURIComponent(room) + suffix; }
+function showView(name) {
+  ['picker','login','player'].forEach(v => $('view-'+v).classList.toggle('show', v === name));
+}
+
+// --- Guest station picker ---------------------------------------------------
+async function loadStations() {
+  let list = [];
+  try { list = await (await fetch(API + '/stations')).json(); } catch (e) {}
+  const el = $('stations');
+  if (!list.length) { el.innerHTML = '<div class="empty">No live stations right now.<br>Check back soon.</div>'; return; }
+  el.innerHTML = '';
+  list.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'station-card';
+    const np = s.nowPlaying ? `${esc(s.nowPlaying.title)} · ${esc(s.nowPlaying.artist)}` : 'Idle';
+    const art = s.nowPlaying && s.nowPlaying.coverArt
+      ? `<img class="sc-art" src="${API}/r/${encodeURIComponent(s.room)}/cover?id=${encodeURIComponent(s.nowPlaying.coverArt)}" alt="">`
+      : `<div class="sc-art"></div>`;
+    card.innerHTML = art +
+      `<div class="sc-meta"><div class="sc-owner">${esc(s.owner)}</div><div class="sc-now">${np}</div></div>` +
+      `<div class="sc-listeners"><span class="dot"></span>${s.listeners}</div>`;
+    card.onclick = () => enterRoom(s.room, true, s.owner);
+    el.appendChild(card);
+  });
+}
+
+// --- Entering a room (player view) -----------------------------------------
+function enterRoom(r, gestured, owner) {
+  room = r;
+  // Guests get a readable, shareable URL: /p/{username}. The room id is the
+  // username, so owner and r are the same; fall back to r for deep links.
+  const url = HOST_MODE ? '/leader' : '/p/' + encodeURIComponent(owner || r);
+  history.replaceState(null, '', url);
+  showView('player');
+  $('listeners-wrap').classList.add('show');
+  $('back').style.display = HOST_MODE ? 'none' : '';
+  current = null; queueKey = '';
+  if (gestured) joined = true; else $('join').classList.add('show');
+  connect();
+  loadQueue();
+}
+
+function leaveRoom() {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  cancelPendingStart();
+  audio.pause(); audio.removeAttribute('src'); audio.load();
+  room = null; joined = false; lastState = null;
+  $('listeners-wrap').classList.remove('show');
+  history.replaceState(null, '', '/party');
+  showView('picker'); loadStations();
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(proto + '://' + location.host + roomURL('/ws'));
+  ws.onmessage = (e) => applyState(JSON.parse(e.data));
+  ws.onclose = () => { if (room) setTimeout(() => { if (room) connect(); }, 2000); };
+}
+
+function setArt(coverArt) {
+  const img = $('art'), ph = $('art-ph');
+  if (coverArt) { img.src = roomURL('/cover?id=' + encodeURIComponent(coverArt)); img.style.display=''; ph.style.display='none'; }
+  else { img.style.display='none'; ph.style.display=''; }
+}
+
+function applyState(st) {
+  lastState = st;
+  $('listeners').textContent = st.listeners ?? 0;
+  $('title').textContent = st.playlist || (isHost ? 'Your station' : (st.owner ? st.owner + "'s station" : 'Listening Station'));
+  $('toggle-icon').querySelector('path').setAttribute('d', st.paused ? PLAY : PAUSE);
+  if (isHost) highlightMode(st.mode);
+
+  const t = st.track;
+  if (!t) {
+    $('np-title').textContent = isHost ? 'Add a playlist to begin' : 'Waiting for the host…';
+    $('np-artist').textContent = ''; $('np-album').textContent = ''; $('dur').textContent = '0:00';
+    setArt(null);
+  } else {
+    $('np-title').textContent = t.title || 'Unknown';
+    $('np-artist').textContent = t.artist || '';
+    $('np-album').textContent = t.album || '';
+    $('dur').textContent = fmt(t.duration);
+    setArt(t.coverArt);
+  }
+
+  const key = st.index + '/' + st.queueLen;
+  if (key !== queueKey) { queueKey = key; loadQueue(); }
+
+  if (!joined || !t) return;
+
+  if (t.id !== current) {
+    // New stream: (re)load it and schedule a clock-aligned start.
+    current = t.id;
+    cancelPendingStart();
+    audio.src = roomURL('/stream?id=' + encodeURIComponent(t.id));
+    audio.load();
+    scheduleStart(st, t);
+    return;
+  }
+
+  if (awaitingStart) return; // a scheduled start is pending; don't fight it
+
+  if (st.paused) {
+    if (!audio.paused) audio.pause();
+    if (Math.abs(audio.currentTime - st.position) > DRIFT) {
+      try { audio.currentTime = Math.max(0, st.position); } catch (e) {}
+    }
+    return;
+  }
+
+  const targetT = targetPosition(st);
+  if (Math.abs(audio.currentTime - targetT) > DRIFT) {
+    try { audio.currentTime = Math.max(0, targetT); } catch (e) {}
+  }
+  if (audio.paused) audio.play().catch(() => {});
+}
+
+// New streams don't begin at the raw "now" position — by the time the audio has
+// buffered we'd already be a beat behind, which is what makes late joiners sound
+// a few seconds off. Instead we round the start up to the next 5-second mark of
+// the track and begin playing exactly when the shared clock reaches it, so every
+// listener lands on the same instant no matter how long their buffering took.
+// Joins near the very start of a track play immediately so the intro isn't lost.
+const SYNC_STEP = 5;     // align mid-track joins to a 5s grid
+const START_LEAD = 0.75; // min seconds of headroom to buffer before that mark
+
+function cancelPendingStart() {
+  if (startTimer) { clearTimeout(startTimer); startTimer = null; }
+  awaitingStart = false;
+}
+
+function scheduleStart(st, t) {
+  const nowPos = targetPosition(st);
+  let startPos, startAtMs;
+  if (nowPos < SYNC_STEP) {
+    startPos = Math.max(0, nowPos);            // near the top: don't skip the intro
+    startAtMs = Date.now();
+  } else {
+    startPos = Math.ceil((nowPos + START_LEAD) / SYNC_STEP) * SYNC_STEP;
+    if (t.duration && startPos >= t.duration - 1) {
+      startPos = Math.max(0, nowPos);          // too close to the end to align
+      startAtMs = Date.now();
+    } else {
+      // Wall-clock instant the track reaches startPos, per the server's stamp.
+      startAtMs = st.serverTime + (startPos - st.position) * 1000;
+    }
+  }
+
+  const begin = () => {
+    awaitingStart = false; startTimer = null;
+    if (current !== t.id) return;              // track changed while we waited
+    if (lastState && lastState.paused) return;
+    const p = startAtMs > Date.now() ? startPos : targetPosition(lastState || st);
+    try { audio.currentTime = Math.max(0, p); } catch (e) {}
+    audio.play().catch(() => {});
+  };
+
+  const onReady = () => {
+    audio.removeEventListener('canplay', onReady);
+    if (current !== t.id) return;
+    if (st.paused) {                            // loaded while paused: hold at position
+      try { audio.currentTime = Math.max(0, st.position); } catch (e) {}
+      return;
+    }
+    const wait = startAtMs - Date.now();
+    if (wait > 30) {
+      try { audio.currentTime = startPos; } catch (e) {} // pre-seek, then hold
+      audio.pause();
+      awaitingStart = true;
+      startTimer = setTimeout(begin, wait);
+    } else {
+      begin();                                  // mark already due: catch up to live
+    }
+  };
+  audio.addEventListener('canplay', onReady);
+}
+
+async function loadQueue() {
+  if (!room) return;
+  try {
+    const q = await (await fetch(roomURL('/queue'))).json();
+    const el = $('queue');
+    el.innerHTML = '';
+    (q.tracks || []).forEach((t, i) => {
+      const row = document.createElement('div');
+      row.className = 'track' + (i === q.index ? ' current' : '');
+      const thumb = t.coverArt
+        ? `<img class="thumb" src="${roomURL('/cover?id=' + encodeURIComponent(t.coverArt))}" alt="" />`
+        : `<div class="thumb"></div>`;
+      const right = i === q.index
+        ? `<div class="eq"><span></span><span></span><span></span></div>`
+        : `<div class="t-dur">${fmt(t.duration)}</div>`;
+      row.innerHTML = thumb + `<div class="meta"><div class="t-title">${esc(t.title)}</div>` +
+        `<div class="t-sub">${esc(t.artist)}</div></div>` + right;
+      el.appendChild(row);
+    });
+    if (!(q.tracks || []).length) el.innerHTML = '<div class="empty">Nothing queued yet.</div>';
+  } catch (e) {}
+}
+
+// Smooth local progress between server snapshots.
+setInterval(() => {
+  if (!lastState || !lastState.track) return;
+  const dur = lastState.track.duration || 1;
+  const pos = lastState.paused ? lastState.position : ((joined && !awaitingStart) ? audio.currentTime : targetPosition(lastState));
+  $('pos').textContent = fmt(pos);
+  $('fill').style.width = Math.min(100, (pos / dur) * 100) + '%';
+}, 250);
+
+// --- Host controls ----------------------------------------------------------
+async function host(path, opts) {
+  const res = await fetch(API + '/host/' + path, Object.assign({ method: 'POST' }, opts || {}));
+  if (res.status === 401) { isHost = false; bootHost(); }
+  return res;
+}
+$('prev').onclick = () => host('prev');
+$('next').onclick = () => host('next');
+$('toggle').onclick = () => host('toggle');
+
+function highlightMode(mode) {
+  document.querySelectorAll('.mode-chip').forEach(c => c.classList.toggle('active', c.dataset.mode === mode));
+}
+document.querySelectorAll('.mode-chip').forEach(c => {
+  c.onclick = () => host('mode?mode=' + c.dataset.mode);
+});
+
+function showOverlay(id, on) { $(id).classList.toggle('show', on); }
+$('open-queue').onclick = () => openQueueEditor();
+$('manage').onclick = () => openQueueEditor();
+$('queue-overlay').onclick = (e) => { if (e.target.id === 'queue-overlay') showOverlay('queue-overlay', false); };
+
+// --- Share link + QR (host) -------------------------------------------------
+function shareURL() {
+  return location.origin + '/p/' + encodeURIComponent(myUser);
+}
+$('share-btn').onclick = () => {
+  if (!myUser || !room) return;
+  const url = shareURL();
+  $('share-url').value = url;
+  $('qr-img').src = API + '/host/qr?url=' + encodeURIComponent(url);
+  $('share-hint').textContent = '';
+  showOverlay('share-overlay', true);
+};
+$('share-close').onclick = () => showOverlay('share-overlay', false);
+$('share-overlay').onclick = (e) => { if (e.target.id === 'share-overlay') showOverlay('share-overlay', false); };
+$('share-copy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($('share-url').value);
+  } catch (e) {
+    $('share-url').select();
+    try { document.execCommand('copy'); } catch (e2) {}
+  }
+  $('share-hint').textContent = 'Link copied';
+};
+
+async function openQueueEditor() {
+  showOverlay('queue-overlay', true);
+  $('queue-hint').textContent = '';
+  try {
+    const q = await (await fetch(roomURL('/queue'))).json();
+    hostQueue = (q.playlists || []).slice();
+  } catch (e) { hostQueue = []; }
+  renderQueueEditor();
+  loadAvailable();
+}
+
+function renderQueueEditor() {
+  const el = $('queue-current');
+  if (!hostQueue.length) { el.innerHTML = '<div class="hint">No playlists queued.</div>'; return; }
+  el.innerHTML = '';
+  hostQueue.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'q-item';
+    row.innerHTML = `<span class="name">${esc(p.name || p.id)}</span>`;
+    const up = mini('M7,14l5,-5l5,5z', i === 0); up.onclick = () => moveQueue(i, -1);
+    const down = mini('M7,10l5,5l5,-5z', i === hostQueue.length - 1); down.onclick = () => moveQueue(i, 1);
+    const rm = mini('M19,13H5v-2h14z', false, true); rm.onclick = () => { hostQueue.splice(i,1); commitQueue(); };
+    row.append(up, down, rm);
+    el.appendChild(row);
+  });
+}
+function mini(path, disabled, danger) {
+  const b = document.createElement('button');
+  b.className = 'mini' + (danger ? ' danger' : '');
+  b.disabled = !!disabled;
+  b.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24"><path d="${path}"/></svg>`;
+  return b;
+}
+function moveQueue(i, d) {
+  const j = i + d; if (j < 0 || j >= hostQueue.length) return;
+  [hostQueue[i], hostQueue[j]] = [hostQueue[j], hostQueue[i]];
+  commitQueue();
+}
+
+async function loadAvailable() {
+  const el = $('queue-available');
+  el.innerHTML = '<div class="hint">Loading…</div>';
+  try {
+    const pls = await (await host('playlists', { method: 'GET' })).json();
+    el.innerHTML = '';
+    pls.forEach(p => {
+      const item = document.createElement('div');
+      item.className = 'pl-item';
+      item.innerHTML = `<span class="name">${esc(p.name)}</span><span class="count">${p.songCount} songs</span>`;
+      item.onclick = () => { hostQueue.push({ id: p.id, name: p.name }); commitQueue(); };
+      el.appendChild(item);
+    });
+    if (!pls.length) el.innerHTML = '<div class="hint">No playlists found on your account.</div>';
+  } catch (e) { el.innerHTML = '<div class="hint">Could not load playlists.</div>'; }
+}
+
+async function commitQueue() {
+  renderQueueEditor();
+  $('queue-hint').textContent = 'Saving…';
+  const res = await host('queue', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playlists: hostQueue }),
+  });
+  $('queue-hint').textContent = res.ok ? '' : 'Save failed';
+  loadQueue();
+}
+
+// --- Boot -------------------------------------------------------------------
+$('back').onclick = leaveRoom;
+$('join-btn').onclick = () => { joined = true; $('join').classList.remove('show'); if (lastState) applyState(lastState); };
+
+function roomFromURL() {
+  const m = location.pathname.match(/^\/p\/([^/]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+async function bootHost() {
+  $('logout').classList.add('show');
+  let me = null;
+  try { const r = await fetch(API + '/me'); if (r.ok) me = await r.json(); } catch (e) {}
+  if (me && me.room) {
+    isHost = true;
+    myUser = me.user;
+    $('manage').classList.add('show');
+    $('transport').classList.add('show');
+    $('host-tools').classList.add('show');
+    enterRoom(me.room, true);
+  } else {
+    isHost = false;
+    $('manage').classList.remove('show');
+    $('transport').classList.remove('show');
+    $('host-tools').classList.remove('show');
+    showView('login');
+  }
+}
+
+$('lg-go').onclick = async () => {
+  const username = $('lg-user').value.trim(), password = $('lg-pass').value;
+  if (!username || !password) return;
+  $('lg-hint').textContent = 'Signing in…';
+  try {
+    const res = await fetch(API + '/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) { $('lg-hint').textContent = 'Invalid Navidrome login'; return; }
+    $('lg-pass').value = '';
+    bootHost();
+  } catch (e) { $('lg-hint').textContent = 'Sign-in failed'; }
+};
+$('logout').onclick = async () => {
+  await fetch(API + '/logout', { method: 'POST' });
+  isHost = false; leaveRoom();
+  $('manage').classList.remove('show'); $('transport').classList.remove('show');
+  $('host-tools').classList.remove('show'); $('logout').classList.remove('show');
+  $('listeners-wrap').classList.remove('show');
+  showView('login');
+};
+
+(function init() {
+  if (HOST_MODE) { document.title = 'Listening Station · Host'; bootHost(); }
+  else {
+    const r = roomFromURL();
+    if (r) enterRoom(r, false); else { showView('picker'); loadStations(); }
+  }
+})();
+</script>
+</body>
+</html>
