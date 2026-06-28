@@ -33,11 +33,16 @@ services:
       STREAM_FORMAT: "${STREAM_FORMAT:-mp3}"
       STREAM_MAX_BITRATE: "${STREAM_MAX_BITRATE:-256}"
       #
-      # Other options (set these in .env, or uncomment-and-edit the .env lines):
+      # Other options (set these in .env, or uncomment-and-edit the .env lines).
+      # All of these except the custom one ship with Navidrome by default:
       #   VBR, smaller files  -> STREAM_FORMAT=opus  STREAM_MAX_BITRATE=128
-      #     Opus ships with Navidrome and is VBR by default; ~128 kbps Opus is
-      #     transparent. Note: Safari plays Ogg/Opus unreliably — prefer MP3 if
-      #     any guests use Safari/iOS.
+      #     Opus is VBR by default; ~128 kbps Opus is transparent. Note: Safari
+      #     plays Ogg/Opus unreliably — prefer MP3 or AAC if guests use Safari/iOS.
+      #   Safari-friendly      -> STREAM_FORMAT=aac   STREAM_MAX_BITRATE=192
+      #     AAC has excellent Safari/iOS support and beats MP3 at low bitrates.
+      #   Lossless (no cap)    -> STREAM_FORMAT=flac  STREAM_MAX_BITRATE=0
+      #     FLAC is lossless: it does NOT save bandwidth (can exceed the source);
+      #     use it to deliver full quality. The bitrate cap is ignored.
       #   VBR MP3 (needs a custom Navidrome profile, e.g. "mp3 vbr" using
       #     `-q:a`) -> STREAM_FORMAT=mp3\ vbr  STREAM_MAX_BITRATE=0
       #   Original files, no transcode -> STREAM_FORMAT=raw  STREAM_MAX_BITRATE=0

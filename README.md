@@ -244,6 +244,8 @@ Navidrome install.
 |---|---|---|
 | `mp3` *(default)* | CBR | Navidrome's stock MP3 profile. Plays in every browser, including Safari/iOS. Pair with `STREAM_MAX_BITRATE=256`. |
 | `opus` | **VBR** | Ships with Navidrome; libopus is VBR by default (the bitrate is a target). Best quality-per-byte; `128` kbps is effectively transparent. Caveat: Safari/iOS play Ogg/Opus unreliably, so avoid it if any guests use Safari. |
+| `aac` | CBR | Ships with Navidrome. Excellent Safari/iOS support and better than MP3 at low bitrates; a good Safari-friendly alternative to Opus. Pair with `STREAM_MAX_BITRATE=192`. |
+| `flac` | — (lossless) | Ships with Navidrome. **Lossless, so it does not cap bandwidth** (it can be larger than the source); use it to deliver full quality, not to save data. The bitrate cap is ignored, so set `STREAM_MAX_BITRATE=0`. Supported in Chrome, Firefox, Edge, and Safari 11+. |
 | *custom, e.g.* `mp3 vbr` | **VBR** | MP3 VBR needs a custom transcoding profile added in Navidrome (Settings → Transcoding) using an ffmpeg `-q:a` command. Set `STREAM_FORMAT` to that profile's exact name and `STREAM_MAX_BITRATE=0`. |
 | `raw` | — | No transcoding; serves the original files. Use with `STREAM_MAX_BITRATE=0`. |
 
