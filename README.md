@@ -216,18 +216,46 @@ sudo systemctl status navidrome-station
 
 ## Configuration
 
-All configuration is via environment variables. There are only two, and the
-service needs no credentials of its own (hosts authenticate with their Navidrome
-accounts).
+All configuration is via environment variables, and the service needs no
+credentials of its own (hosts authenticate with their Navidrome accounts).
 
 | Variable | Default | Description |
 |---|---|---|
 | `ND_URL` | `http://localhost:4533` | Base URL of your Navidrome instance. |
 | `LISTEN_ADDR` | `:8080` | Address/port the service listens on. |
+| `STREAM_FORMAT` | `mp3` | Transcode target for streamed audio. Must match a transcoding profile in Navidrome (`mp3` ships by default). Set to `raw` to serve original files. |
+| `STREAM_MAX_BITRATE` | `256` | Maximum stream bitrate in kbps, to cap per-listener bandwidth. Set to `0` for no cap. |
 
-For Docker, set these under `environment:` in `docker-compose.yml`. For the bare
-binary, set them in the environment (see the `.env.example` file and the systemd
-unit above).
+For Docker, these are read from the global `.env` file next to
+`docker-compose.yml` (copy `.env.example` to `.env` and edit). For the bare
+binary, export them or use the systemd unit above. Both files ship with the
+common options listed below, commented out and ready to uncomment.
+
+### Transcoding and VBR
+
+Every track is streamed through Navidrome's transcoder so each listener gets a
+predictable, bandwidth-capped stream rather than the original (possibly lossless)
+file. **Whether a stream is VBR or CBR is decided by the Navidrome transcoding
+profile you select with `STREAM_FORMAT`**, not by this service, which only proxies
+Navidrome's output. `STREAM_FORMAT` must name a profile that exists in your
+Navidrome install.
+
+| `STREAM_FORMAT` | Mode | Notes |
+|---|---|---|
+| `mp3` *(default)* | CBR | Navidrome's stock MP3 profile. Plays in every browser, including Safari/iOS. Pair with `STREAM_MAX_BITRATE=256`. |
+| `opus` | **VBR** | Ships with Navidrome; libopus is VBR by default (the bitrate is a target). Best quality-per-byte; `128` kbps is effectively transparent. Caveat: Safari/iOS play Ogg/Opus unreliably, so avoid it if any guests use Safari. |
+| *custom, e.g.* `mp3 vbr` | **VBR** | MP3 VBR needs a custom transcoding profile added in Navidrome (Settings → Transcoding) using an ffmpeg `-q:a` command. Set `STREAM_FORMAT` to that profile's exact name and `STREAM_MAX_BITRATE=0`. |
+| `raw` | — | No transcoding; serves the original files. Use with `STREAM_MAX_BITRATE=0`. |
+
+To switch to VBR Opus, uncomment the Opus lines in `.env`/`docker-compose.yml`:
+
+```env
+STREAM_FORMAT=opus
+STREAM_MAX_BITRATE=128
+```
+
+`STREAM_MAX_BITRATE` is the cap in kbps; `0` means no cap (let the profile
+decide, which is what you want for a natively-VBR profile).
 
 ## Reverse proxy
 
@@ -403,8 +431,11 @@ runs on:
 - The queue is built from the host's playlists, flattened into a single track
   list. Edits rebuild it live without interrupting the currently playing track
   when it survives the change.
-- Queued playlists are re-polled from Navidrome every 30s, so edits made in
-  Navidrome itself flow through automatically.
+- Queued playlists are re-polled from Navidrome only when it matters rather than
+  on a fixed timer: about 10 seconds before the current track ends, when playback
+  is paused, and when a track is skipped. So edits made in Navidrome itself flow
+  through automatically while an idle or steadily playing station makes no
+  upstream calls of its own.
 - Now playing shows title / artist / album and cover art, the name of the
   playlist the current track came from, and a live listener count.
 

@@ -15,7 +15,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The Subsonic client must only ever be able to call read-only methods, so the
 // station can never write to or change the connected Navidrome instance. endpoint
@@ -23,7 +26,7 @@ import "testing"
 // mutating method (returning "" so no request is made) and permit the read-only
 // ones the service relies on.
 func TestSubsonicAllowlistBlocksWrites(t *testing.T) {
-	s := NewSubsonic("http://nd:4533", "u", "p")
+	s := NewSubsonic("http://nd:4533", "u", "p", "mp3", 256)
 
 	// A representative sample of Subsonic methods that mutate server state. None
 	// of these may ever produce a URL.
@@ -50,8 +53,25 @@ func TestSubsonicAllowlistBlocksWrites(t *testing.T) {
 
 // getJSON must fail closed (no network call) for a disallowed method.
 func TestGetJSONRefusesDisallowedMethod(t *testing.T) {
-	s := NewSubsonic("http://nd:4533", "u", "p")
+	s := NewSubsonic("http://nd:4533", "u", "p", "mp3", 256)
 	if _, err := s.getJSON("deletePlaylist", nil); err == nil {
 		t.Fatal("getJSON allowed a mutating method")
+	}
+}
+
+// StreamURL must carry the configured transcode format and bitrate so listeners
+// get a bandwidth-capped stream, and must omit them when transcoding is disabled
+// (empty/"raw" format, zero bitrate) so the original file is served.
+func TestStreamURLTranscodeParams(t *testing.T) {
+	on := NewSubsonic("http://nd:4533", "u", "p", "mp3", 256)
+	got := on.StreamURL("42")
+	if !strings.Contains(got, "format=mp3") || !strings.Contains(got, "maxBitRate=256") {
+		t.Errorf("StreamURL missing transcode params: %q", got)
+	}
+
+	off := NewSubsonic("http://nd:4533", "u", "p", "raw", 0)
+	got = off.StreamURL("42")
+	if strings.Contains(got, "format=") || strings.Contains(got, "maxBitRate=") {
+		t.Errorf("StreamURL should omit transcode params when disabled: %q", got)
 	}
 }

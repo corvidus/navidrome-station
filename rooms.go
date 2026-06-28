@@ -38,18 +38,22 @@ const (
 // by username — which is also the station's public id, so guests reach it at a
 // stable, shareable URL (/p/{username}). It also tracks host login sessions.
 type Manager struct {
-	ndURL string
+	ndURL         string
+	streamFormat  string // transcode target applied to every host's stream client
+	streamBitRate int    // max kbps for transcoding
 
 	mu       sync.Mutex
 	byUser   map[string]*Station
 	sessions map[string]string // session id -> username
 }
 
-func NewManager(ndURL string) *Manager {
+func NewManager(ndURL, streamFormat string, streamBitRate int) *Manager {
 	m := &Manager{
-		ndURL:    ndURL,
-		byUser:   make(map[string]*Station),
-		sessions: make(map[string]string),
+		ndURL:         ndURL,
+		streamFormat:  streamFormat,
+		streamBitRate: streamBitRate,
+		byUser:        make(map[string]*Station),
+		sessions:      make(map[string]string),
 	}
 	go m.reapLoop()
 	return m
@@ -70,7 +74,7 @@ type StationInfo struct {
 // just refreshes the stored credentials.
 func (m *Manager) Login(user, pass string) (sid, room string, err error) {
 	user = strings.TrimSpace(user)
-	sub := NewSubsonic(m.ndURL, user, pass)
+	sub := NewSubsonic(m.ndURL, user, pass, m.streamFormat, m.streamBitRate)
 	if err := sub.Ping(); err != nil {
 		return "", "", err
 	}

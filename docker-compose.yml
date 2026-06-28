@@ -22,6 +22,25 @@ services:
       # Point this at your Navidrome. The default assumes Navidrome is reachable
       # as "navidrome:4533" on the shared Docker network defined below.
       ND_URL: "http://navidrome:4533"
+      # --- Transcoding -------------------------------------------------------
+      # Every stream is transcoded by Navidrome to cap per-listener bandwidth.
+      # These two settings are read from the global .env file (copy .env.example
+      # to .env to change them in one place); the ":-" values are the defaults
+      # used when .env is absent. STREAM_FORMAT must name a transcoding profile
+      # that exists in Navidrome.
+      #
+      # Default: 256 kbps CBR MP3 — plays in every browser, works out of the box.
+      STREAM_FORMAT: "${STREAM_FORMAT:-mp3}"
+      STREAM_MAX_BITRATE: "${STREAM_MAX_BITRATE:-256}"
+      #
+      # Other options (set these in .env, or uncomment-and-edit the .env lines):
+      #   VBR, smaller files  -> STREAM_FORMAT=opus  STREAM_MAX_BITRATE=128
+      #     Opus ships with Navidrome and is VBR by default; ~128 kbps Opus is
+      #     transparent. Note: Safari plays Ogg/Opus unreliably — prefer MP3 if
+      #     any guests use Safari/iOS.
+      #   VBR MP3 (needs a custom Navidrome profile, e.g. "mp3 vbr" using
+      #     `-q:a`) -> STREAM_FORMAT=mp3\ vbr  STREAM_MAX_BITRATE=0
+      #   Original files, no transcode -> STREAM_FORMAT=raw  STREAM_MAX_BITRATE=0
     ports:
       # host:container — change the host port to taste, then point a reverse
       # proxy (for TLS) at it. See the README for path-based routing.

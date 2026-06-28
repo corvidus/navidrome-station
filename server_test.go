@@ -31,7 +31,7 @@ func TestHostQRCode(t *testing.T) {
 	nd := mockND(t)
 	defer nd.Close()
 	api := http.NewServeMux()
-	registerAPI(api, NewManager(nd.URL))
+	registerAPI(api, NewManager(nd.URL, "mp3", 256))
 	ts := httptest.NewServer(api)
 	defer ts.Close()
 

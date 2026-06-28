@@ -232,7 +232,7 @@ func mockND(t *testing.T) *httptest.Server {
 func TestLoginRejectsBadCreds(t *testing.T) {
 	srv := mockND(t)
 	defer srv.Close()
-	m := NewManager(srv.URL)
+	m := NewManager(srv.URL, "mp3", 256)
 	if _, _, err := m.Login("baduser", "p"); err == nil {
 		t.Fatal("expected login failure for bad credentials")
 	}
@@ -241,7 +241,7 @@ func TestLoginRejectsBadCreds(t *testing.T) {
 func TestLoginCreatesRoomAndQueue(t *testing.T) {
 	srv := mockND(t)
 	defer srv.Close()
-	m := NewManager(srv.URL)
+	m := NewManager(srv.URL, "mp3", 256)
 
 	sid, room, err := m.Login("alice", "p")
 	if err != nil {
@@ -303,7 +303,7 @@ func TestRefreshReflectsUpstreamEdits(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	st := NewStation("r1", "u", NewSubsonic(srv.URL, "u", "p"), NewHub())
+	st := NewStation("r1", "u", NewSubsonic(srv.URL, "u", "p", "mp3", 256), NewHub())
 	if err := st.SetPlaylists([]QueuedPlaylist{{ID: "pl1"}}); err != nil {
 		t.Fatalf("SetPlaylists: %v", err)
 	}
@@ -337,12 +337,89 @@ func TestRefreshReflectsUpstreamEdits(t *testing.T) {
 	}
 }
 
+// triggerRefresh coalesces a burst of events into a single pending fetch, so the
+// station never queues up redundant upstream polls.
+func TestTriggerRefreshCoalesces(t *testing.T) {
+	st := testStation(1)
+	st.triggerRefresh()
+	st.triggerRefresh()
+	st.triggerRefresh()
+	if n := len(st.refreshCh); n != 1 {
+		t.Fatalf("triggerRefresh did not coalesce: %d pending, want 1", n)
+	}
+}
+
+// preEndDue fires exactly once as a track enters its final seconds, stays quiet
+// otherwise, re-arms for the next track, and never fires while paused.
+func TestPreEndDueOneShotAndRearm(t *testing.T) {
+	st := testStation(1)
+	st.queue[0].Duration = 30
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	// Early in the track: nothing due.
+	st.startedAt = time.Now()
+	if st.preEndDue() {
+		t.Fatal("preEndDue fired early in the track")
+	}
+	// Inside the final preEndRefreshLead seconds (~5s left of 30): fires once.
+	st.startedAt = time.Now().Add(-25 * time.Second)
+	if !st.preEndDue() {
+		t.Fatal("preEndDue did not fire near the end")
+	}
+	if st.preEndDue() {
+		t.Fatal("preEndDue fired more than once for the same track")
+	}
+	// A new track (seekToStart clears the flag) re-arms the trigger.
+	st.seekToStart()
+	st.startedAt = time.Now().Add(-25 * time.Second)
+	if !st.preEndDue() {
+		t.Fatal("preEndDue did not re-arm after seekToStart")
+	}
+	// Paused playback never triggers.
+	st.preEndRefreshed = false
+	st.paused = true
+	if st.preEndDue() {
+		t.Fatal("preEndDue fired while paused")
+	}
+}
+
+// Skipping and pausing each request a playlist refresh; resuming does not.
+func TestSkipAndPauseTriggerRefresh(t *testing.T) {
+	st := testStation(2)
+	drain := func() {
+		select {
+		case <-st.refreshCh:
+		default:
+		}
+	}
+
+	drain()
+	st.Skip(1)
+	if len(st.refreshCh) != 1 {
+		t.Fatal("Skip did not request a playlist refresh")
+	}
+
+	drain()
+	st.SetPaused(true)
+	if len(st.refreshCh) != 1 {
+		t.Fatal("pausing did not request a playlist refresh")
+	}
+
+	drain()
+	st.SetPaused(false)
+	if len(st.refreshCh) != 0 {
+		t.Fatal("resuming should not request a refresh")
+	}
+}
+
 // State reports the name of the playlist the current track came from, switching
 // as playback crosses from one queued playlist into the next.
 func TestStateReportsCurrentPlaylistName(t *testing.T) {
 	srv := mockND(t)
 	defer srv.Close()
-	m := NewManager(srv.URL)
+	m := NewManager(srv.URL, "mp3", 256)
 	_, room, _ := m.Login("carol", "p")
 	st, _ := m.Room(room)
 
@@ -362,7 +439,7 @@ func TestStateReportsCurrentPlaylistName(t *testing.T) {
 func TestSetPlaylistsKeepsCurrentTrackPlaying(t *testing.T) {
 	srv := mockND(t)
 	defer srv.Close()
-	m := NewManager(srv.URL)
+	m := NewManager(srv.URL, "mp3", 256)
 	_, room, _ := m.Login("bob", "p")
 	st, _ := m.Room(room)
 

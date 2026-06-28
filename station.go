@@ -79,24 +79,26 @@ type QueueMsg struct {
 // cursor within order, so the current track is queue[order[seqPos]]. In "all" and
 // "none" modes order is the identity; in "shuffle" it is a random permutation.
 type Station struct {
-	mu          sync.Mutex
-	id          string
-	owner       string
-	sub         *Subsonic
-	playlists   []QueuedPlaylist
-	queue       []Track
-	trackPL     []string // name of the source playlist for each queue track
-	order       []int
-	seqPos      int
-	mode        PlayMode
-	startedAt   time.Time
-	paused      bool
-	pausedPos   float64
-	lastActive  time.Time
-	leaderConns int       // live WebSocket connections from the host (the leader)
-	leaderSeen  time.Time // when the leader was last connected (now, while connected)
-	hub         *Hub
-	done        chan struct{}
+	mu              sync.Mutex
+	id              string
+	owner           string
+	sub             *Subsonic
+	playlists       []QueuedPlaylist
+	queue           []Track
+	trackPL         []string // name of the source playlist for each queue track
+	order           []int
+	seqPos          int
+	mode            PlayMode
+	startedAt       time.Time
+	paused          bool
+	pausedPos       float64
+	preEndRefreshed bool // a pre-end playlist refresh has fired for the current track
+	lastActive      time.Time
+	leaderConns     int       // live WebSocket connections from the host (the leader)
+	leaderSeen      time.Time // when the leader was last connected (now, while connected)
+	hub             *Hub
+	done            chan struct{}
+	refreshCh       chan struct{} // coalesced signal to re-poll queued playlists
 }
 
 // NewStation creates an empty (idle) station owned by user, streaming through sub.
@@ -111,6 +113,7 @@ func NewStation(id, owner string, sub *Subsonic, hub *Hub) *Station {
 		leaderSeen: time.Now(),
 		hub:        hub,
 		done:       make(chan struct{}),
+		refreshCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -188,6 +191,7 @@ func (s *Station) curIndex() int {
 func (s *Station) seekToStart() {
 	s.startedAt = time.Now()
 	s.pausedPos = 0
+	s.preEndRefreshed = false
 }
 
 // rebuildOrder regenerates the play sequence for the current mode. If preserveID
@@ -403,16 +407,21 @@ func (s *Station) SetMode(m PlayMode) {
 // SetPaused pauses or resumes playback, freezing/rebasing the shared clock.
 func (s *Station) SetPaused(pause bool) {
 	s.mu.Lock()
+	justPaused := false
 	switch {
 	case pause && !s.paused:
 		s.pausedPos = time.Since(s.startedAt).Seconds()
 		s.paused = true
+		justPaused = true
 	case !pause && s.paused:
 		s.startedAt = time.Now().Add(-time.Duration(s.pausedPos * float64(time.Second)))
 		s.paused = false
 	}
 	s.lastActive = time.Now()
-	s.broadcastLocked()
+	s.broadcastLocked() // releases s.mu
+	if justPaused {
+		s.triggerRefresh()
+	}
 }
 
 // Toggle flips the paused state.
@@ -446,7 +455,8 @@ func (s *Station) Skip(delta int) {
 		log.Printf("station %s: skipped to %q", s.id, s.queue[s.curIndex()].Title)
 	}
 	s.lastActive = time.Now()
-	s.broadcastLocked()
+	s.broadcastLocked() // releases s.mu
+	s.triggerRefresh()
 }
 
 // --- Streaming through the host's credentials ------------------------------
@@ -512,13 +522,45 @@ func (s *Station) advance() bool {
 	return true
 }
 
-// refreshInterval is how often a running station re-polls its queued playlists
-// from Navidrome to pick up edits made there.
-const refreshInterval = 30 * time.Second
+// preEndRefreshLead is how many seconds before a track ends the station re-polls
+// its queued playlists, so upstream edits land right before the track changes.
+const preEndRefreshLead = 10
 
-// Run drives the station: it advances tracks as they finish and periodically
-// re-broadcasts state so late joiners and drifting clients stay in sync. It runs
-// for the life of the station, idling quietly when nothing is queued.
+// preEndDue reports whether the current playing track has just entered its final
+// preEndRefreshLead seconds without a pre-end refresh having fired for it yet,
+// arming the one-shot flag so only the first tick in that window triggers (the
+// flag is cleared by seekToStart whenever a new track begins). Caller must hold
+// s.mu.
+func (s *Station) preEndDue() bool {
+	if s.paused || s.preEndRefreshed || len(s.order) == 0 {
+		return false
+	}
+	cur := s.queue[s.curIndex()]
+	dur := float64(cur.Duration)
+	if dur <= 0 {
+		dur = 240 // matches advance()'s default when duration is unknown
+	}
+	if dur-s.position() <= preEndRefreshLead {
+		s.preEndRefreshed = true
+		return true
+	}
+	return false
+}
+
+// triggerRefresh asks the refresh goroutine to re-poll the queued playlists.
+// Sends are coalesced: if a refresh is already pending it is a no-op, so a burst
+// of events (e.g. skip then pause) collapses to a single upstream fetch.
+func (s *Station) triggerRefresh() {
+	select {
+	case s.refreshCh <- struct{}{}:
+	default:
+	}
+}
+
+// Run drives the station: it advances tracks as they finish, re-broadcasts state
+// so late joiners and drifting clients stay in sync, and fires a playlist
+// refresh as a track nears its end. It runs for the life of the station, idling
+// quietly when nothing is queued.
 func (s *Station) Run() {
 	go s.refreshLoop()
 	ticker := time.NewTicker(time.Second)
@@ -532,9 +574,13 @@ func (s *Station) Run() {
 		}
 		s.mu.Lock()
 		advanced := s.advance()
+		refresh := s.preEndDue()
 		state := s.snapshot()
 		s.mu.Unlock()
 
+		if refresh {
+			s.triggerRefresh()
+		}
 		heartbeat++
 		if advanced || heartbeat%5 == 0 {
 			s.hub.Broadcast(state)
@@ -542,17 +588,17 @@ func (s *Station) Run() {
 	}
 }
 
-// refreshLoop periodically re-syncs the queue with the host's playlists in
-// Navidrome until the station is stopped. The fetch runs off the main loop so it
-// never delays track advancement.
+// refreshLoop re-syncs the queue with the host's Navidrome playlists on demand:
+// it waits for a signal from triggerRefresh (fired near a track's end, on pause,
+// or on skip) rather than polling on a fixed interval, so an idle or steadily
+// playing station makes no upstream calls of its own. The fetch runs off the
+// main loop so it never delays track advancement.
 func (s *Station) refreshLoop() {
-	t := time.NewTicker(refreshInterval)
-	defer t.Stop()
 	for {
 		select {
 		case <-s.done:
 			return
-		case <-t.C:
+		case <-s.refreshCh:
 			s.refreshPlaylists()
 		}
 	}

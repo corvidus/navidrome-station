@@ -25,6 +25,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -37,6 +38,14 @@ type Subsonic struct {
 	pass    string
 	client  string
 	http    *http.Client
+
+	// streamFormat/streamBitRate let the server ask Navidrome to transcode audio
+	// down to a fixed format and bitrate, capping per-listener bandwidth. They map
+	// to the Subsonic stream "format" and "maxBitRate" params. A "raw" or empty
+	// format, or a zero bitrate, omits that param and leaves the choice to
+	// Navidrome (i.e. original quality).
+	streamFormat  string
+	streamBitRate int
 }
 
 // Track is the subset of a Subsonic song we care about for the station.
@@ -56,13 +65,15 @@ type Playlist struct {
 	SongCount int    `json:"songCount"`
 }
 
-func NewSubsonic(baseURL, user, pass string) *Subsonic {
+func NewSubsonic(baseURL, user, pass, streamFormat string, streamBitRate int) *Subsonic {
 	return &Subsonic{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		user:    user,
-		pass:    pass,
-		client:  "navidrome-station",
-		http:    &http.Client{Timeout: 30 * time.Second},
+		baseURL:       strings.TrimRight(baseURL, "/"),
+		user:          user,
+		pass:          pass,
+		client:        "navidrome-station",
+		http:          &http.Client{Timeout: 30 * time.Second},
+		streamFormat:  streamFormat,
+		streamBitRate: streamBitRate,
 	}
 }
 
@@ -192,9 +203,18 @@ func (s *Subsonic) Playlists() ([]Playlist, error) {
 	return env.Response.Playlists.Playlist, nil
 }
 
-// StreamURL returns the upstream URL for streaming a track's audio.
+// StreamURL returns the upstream URL for streaming a track's audio, asking
+// Navidrome to transcode to the configured format and bitrate so every listener
+// gets a predictable, bandwidth-capped stream rather than the original file.
 func (s *Subsonic) StreamURL(id string) string {
-	return s.endpoint("stream", url.Values{"id": {id}})
+	v := url.Values{"id": {id}}
+	if f := s.streamFormat; f != "" && !strings.EqualFold(f, "raw") {
+		v.Set("format", f)
+	}
+	if s.streamBitRate > 0 {
+		v.Set("maxBitRate", strconv.Itoa(s.streamBitRate))
+	}
+	return s.endpoint("stream", v)
 }
 
 // CoverURL returns the upstream URL for a cover art image.

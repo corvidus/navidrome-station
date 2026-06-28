@@ -21,6 +21,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 )
 
 // indexHTML is the single-page UI, embedded so the binary is self-contained
@@ -32,20 +33,34 @@ var indexHTML []byte
 
 // config is read entirely from environment variables (see .env.example).
 type config struct {
-	listen string
-	ndURL  string
+	listen        string
+	ndURL         string
+	streamFormat  string // Subsonic transcode target, e.g. "mp3" ("raw" disables it)
+	streamBitRate int    // max kbps for transcoding; 0 leaves it to Navidrome
 }
 
 func loadConfig() config {
 	return config{
-		listen: env("LISTEN_ADDR", ":8080"),
-		ndURL:  env("ND_URL", "http://localhost:4533"),
+		listen:        env("LISTEN_ADDR", ":8080"),
+		ndURL:         env("ND_URL", "http://localhost:4533"),
+		streamFormat:  env("STREAM_FORMAT", "mp3"),
+		streamBitRate: envInt("STREAM_MAX_BITRATE", 256),
 	}
 }
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+		log.Printf("config: ignoring non-integer %s=%q, using %d", key, v, def)
 	}
 	return def
 }
@@ -61,7 +76,7 @@ func main() {
 
 	// Hosts authenticate with their own Navidrome credentials, so the service
 	// itself needs no account — just the backend URL.
-	manager := NewManager(cfg.ndURL)
+	manager := NewManager(cfg.ndURL, cfg.streamFormat, cfg.streamBitRate)
 
 	mux := http.NewServeMux()
 
