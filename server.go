@@ -20,6 +20,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/skip2/go-qrcode"
@@ -88,6 +89,15 @@ func registerAPI(api *http.ServeMux, m *Manager) {
 
 	api.HandleFunc("GET /stations", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, m.List())
+	})
+
+	// Clock-offset probe. Clients hit this a few times and use the round trip to
+	// estimate the gap between their own Date.now() and the server clock, so the
+	// shared playback clock (position + serverTime) is read against the server's
+	// time rather than the device's (which can be seconds off). Cheap and stateless.
+	api.HandleFunc("GET /time", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, map[string]int64{"server": time.Now().UnixMilli()})
 	})
 
 	// --- Per-room listener endpoints ---------------------------------------

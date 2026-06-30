@@ -326,8 +326,17 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const audio = $('audio');
-const DRIFT = 1.5;
 const API = '/station';
+// Drift correction. Audio element start-up latency leaves a steady sub-second lag
+// behind the shared clock, and stalls/backgrounding cause larger jumps. We glide
+// small drift away with a pitch-preserved playback-rate nudge (inaudible) and
+// hard-seek only for big gaps. RESYNC_MS runs this locally, independent of the
+// now-sparse server broadcasts, so steady-state drift can't accumulate.
+const SEEK_THRESHOLD = 1.0;   // |drift| s above this: snap (stall / post-sleep / big desync)
+const RATE_DEADBAND  = 0.05;  // within 50 ms: aligned, play at 1x
+const RATE_MAX       = 0.10;  // max tempo nudge, +/-10% (pitch-preserved, ~inaudible)
+const PAUSE_SNAP     = 0.10;  // when paused, hold within 100 ms of the held position
+const RESYNC_MS      = 1000;  // local correction cadence
 const HOST_MODE = location.pathname.replace(/\/+$/, '').endsWith('/leader');
 
 let room = null;          // current room id
@@ -337,12 +346,102 @@ let startTimer = null, awaitingStart = false; // pending aligned-start of a new 
 let hostQueue = [];       // host's working copy of queued playlists
 let myUser = null;        // signed-in host's username (for the shareable link)
 
+// Clock offset (NTP-lite): ms to add to the device clock to read the server's
+// clock. The shared playback position is stamped in server time, so without this
+// a device whose clock is off would be permanently out of sync. Measured against
+// /station/time; see syncClock(). clockRtt is the round trip of the chosen sample.
+let clockOffset = 0;
+let clockRtt = Infinity;
+// Sync diagnostics: enable with ?debug=sync or localStorage.syncDebug='1'.
+const SYNC_DEBUG = /[?&]debug=sync\b/.test(location.search) || localStorage.getItem('syncDebug') === '1';
+
 const PLAY = 'M8,5v14l11,-7z';                       // Material play_arrow
 const PAUSE = 'M6,19h4V5H6v14zM14,5v14h4V5h-4z';      // Material pause
 
 function fmt(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
 function esc(s) { return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function targetPosition(st) { return st.position + (Date.now() - st.serverTime) / 1000; }
+// serverNow is the current time on the server's clock, as best we can estimate
+// it from this device. All shared-clock maths uses this, never raw Date.now().
+function serverNow() { return Date.now() + clockOffset; }
+function targetPosition(st) { return st.position + (serverNow() - st.serverTime) / 1000; }
+
+// resync pulls audio.currentTime toward the shared clock. Small drift is corrected
+// by nudging playbackRate (smooth, pitch-preserved); large drift snaps. Runs both
+// on each state message and on a local timer (broadcasts are sparse now).
+function resync() {
+  const st = lastState;
+  if (!joined || !st || !st.track || awaitingStart) return;
+  if (current !== st.track.id || audio.paused) return;
+  const drift = audio.currentTime - targetPosition(st); // <0 = behind the clock
+  const ad = Math.abs(drift);
+  if (ad > SEEK_THRESHOLD) {
+    audio.playbackRate = 1;
+    try { audio.currentTime = Math.max(0, targetPosition(st)); } catch (e) {}
+  } else if (ad > RATE_DEADBAND) {
+    const nudge = Math.min(RATE_MAX, ad * 0.5);
+    audio.playbackRate = drift < 0 ? 1 + nudge : 1 - nudge; // behind -> speed up
+  } else if (audio.playbackRate !== 1) {
+    audio.playbackRate = 1;
+  }
+}
+
+// syncClock estimates clockOffset by probing /time a handful of times and keeping
+// the sample with the lowest round trip (least network jitter), NTP-style:
+//   offset = serverStamp - (sendTime + recvTime) / 2
+// Re-run periodically so it tracks slow device-clock drift.
+async function syncClock(samples = 8) {
+  let best = null;
+  for (let i = 0; i < samples; i++) {
+    const t0 = Date.now();
+    let server;
+    try { server = (await (await fetch(API + '/time', { cache: 'no-store' })).json()).server; }
+    catch (e) { continue; }
+    const t3 = Date.now();
+    const rtt = t3 - t0;
+    const offset = server - (t0 + t3) / 2;
+    if (!best || rtt < best.rtt) best = { rtt, offset };
+  }
+  if (best) {
+    clockOffset = best.offset; clockRtt = best.rtt;
+    if (SYNC_DEBUG) console.log(`[sync] clock offset ${best.offset.toFixed(0)}ms (best RTT ${best.rtt.toFixed(0)}ms)`);
+    updateSyncOverlay();
+  }
+}
+
+// --- Sync diagnostics overlay (debug only) ---------------------------------
+let syncOverlayEl = null, driftStats = null;
+function bufferedAhead() {
+  try {
+    for (let i = 0; i < audio.buffered.length; i++) {
+      if (audio.currentTime >= audio.buffered.start(i) && audio.currentTime <= audio.buffered.end(i))
+        return audio.buffered.end(i) - audio.currentTime;
+    }
+  } catch (e) {}
+  return 0;
+}
+function updateSyncOverlay() {
+  if (!SYNC_DEBUG) return;
+  if (!syncOverlayEl) {
+    syncOverlayEl = document.createElement('div');
+    syncOverlayEl.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9999;font:11px/1.45 monospace;background:rgba(0,0,0,.82);color:#0f0;padding:6px 8px;border-radius:6px;white-space:pre;pointer-events:none;max-width:70vw';
+    document.body.appendChild(syncOverlayEl);
+  }
+  const st = lastState;
+  let drift = NaN, target = NaN;
+  if (st && st.track && joined && !st.paused) { target = targetPosition(st); drift = audio.currentTime - target; }
+  if (Number.isFinite(drift)) {
+    driftStats = driftStats || { max: 0, n: 0, sum2: 0 };
+    driftStats.n++; driftStats.sum2 += drift * drift; driftStats.max = Math.max(driftStats.max, Math.abs(drift));
+    console.log(`[sync] drift ${(drift * 1000).toFixed(0)}ms  audio=${audio.currentTime.toFixed(3)}  target=${target.toFixed(3)}  offset=${clockOffset.toFixed(0)}ms`);
+  }
+  const rms = driftStats && driftStats.n ? Math.sqrt(driftStats.sum2 / driftStats.n) : 0;
+  syncOverlayEl.textContent =
+    `offset ${clockOffset.toFixed(0)}ms   rtt ${Number.isFinite(clockRtt) ? clockRtt.toFixed(0) : '-'}ms\n` +
+    `audio  ${audio.currentTime.toFixed(3)}s\n` +
+    `target ${Number.isFinite(target) ? target.toFixed(3) + 's' : '-'}\n` +
+    `drift  ${Number.isFinite(drift) ? (drift * 1000).toFixed(0) + 'ms' : '-'}   |max| ${(driftStats ? driftStats.max * 1000 : 0).toFixed(0)}ms  rms ${(rms * 1000).toFixed(0)}ms\n` +
+    `state  ${audio.paused ? 'paused' : 'playing'}${awaitingStart ? ' (awaiting start)' : ''}   rate ${audio.playbackRate.toFixed(3)}   buf+${bufferedAhead().toFixed(2)}s`;
+}
 function roomURL(suffix) { return API + '/r/' + encodeURIComponent(room) + suffix; }
 function showView(name) {
   ['picker','login','player'].forEach(v => $('view-'+v).classList.toggle('show', v === name));
@@ -448,17 +547,15 @@ function applyState(st) {
 
   if (st.paused) {
     if (!audio.paused) audio.pause();
-    if (Math.abs(audio.currentTime - st.position) > DRIFT) {
+    audio.playbackRate = 1;
+    if (Math.abs(audio.currentTime - st.position) > PAUSE_SNAP) {
       try { audio.currentTime = Math.max(0, st.position); } catch (e) {}
     }
     return;
   }
 
-  const targetT = targetPosition(st);
-  if (Math.abs(audio.currentTime - targetT) > DRIFT) {
-    try { audio.currentTime = Math.max(0, targetT); } catch (e) {}
-  }
   if (audio.paused) audio.play().catch(() => {});
+  resync();
 }
 
 // New streams don't begin at the raw "now" position — by the time the audio has
@@ -477,15 +574,15 @@ function cancelPendingStart() {
 
 function scheduleStart(st, t) {
   const nowPos = targetPosition(st);
-  let startPos, startAtMs;
+  let startPos, startAtMs;                      // startAtMs is in SERVER time
   if (nowPos < SYNC_STEP) {
     startPos = Math.max(0, nowPos);            // near the top: don't skip the intro
-    startAtMs = Date.now();
+    startAtMs = serverNow();
   } else {
     startPos = Math.ceil((nowPos + START_LEAD) / SYNC_STEP) * SYNC_STEP;
     if (t.duration && startPos >= t.duration - 1) {
       startPos = Math.max(0, nowPos);          // too close to the end to align
-      startAtMs = Date.now();
+      startAtMs = serverNow();
     } else {
       // Wall-clock instant the track reaches startPos, per the server's stamp.
       startAtMs = st.serverTime + (startPos - st.position) * 1000;
@@ -496,7 +593,7 @@ function scheduleStart(st, t) {
     awaitingStart = false; startTimer = null;
     if (current !== t.id) return;              // track changed while we waited
     if (lastState && lastState.paused) return;
-    const p = startAtMs > Date.now() ? startPos : targetPosition(lastState || st);
+    const p = startAtMs > serverNow() ? startPos : targetPosition(lastState || st);
     try { audio.currentTime = Math.max(0, p); } catch (e) {}
     audio.play().catch(() => {});
   };
@@ -508,7 +605,7 @@ function scheduleStart(st, t) {
       try { audio.currentTime = Math.max(0, st.position); } catch (e) {}
       return;
     }
-    const wait = startAtMs - Date.now();
+    const wait = startAtMs - serverNow();
     if (wait > 30) {
       try { audio.currentTime = startPos; } catch (e) {} // pre-seek, then hold
       audio.pause();
@@ -719,6 +816,22 @@ $('logout').onclick = async () => {
 };
 
 (function init() {
+  // Measure the server clock offset before anything tries to sync, then keep it
+  // fresh so slow device-clock drift can't reopen a gap. Re-measure on tab focus
+  // (laptops that slept can wake with a skewed clock).
+  syncClock();
+  setInterval(syncClock, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) syncClock(); });
+
+  // Keep tempo nudges pitch-true, then run the local drift correction on a timer
+  // so a steadily playing track stays aligned without waiting for a broadcast.
+  audio.preservesPitch = true;
+  if ('mozPreservesPitch' in audio) audio.mozPreservesPitch = true;
+  if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = true;
+  setInterval(resync, RESYNC_MS);
+
+  if (SYNC_DEBUG) { console.log('[sync] debug overlay on'); setInterval(updateSyncOverlay, 1000); }
+
   if (HOST_MODE) { document.title = 'Listening Station · Host'; bootHost(); }
   else {
     const r = roomFromURL();
